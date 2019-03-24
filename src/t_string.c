@@ -300,6 +300,35 @@ void mgetCommand(client *c) {
     }
 }
 
+void ggetCommand(client *c) {
+    int j;
+    sds group = keyToGroupsGet(c->argc - 1, &(c->argv[1]));
+
+    
+    // Multi Get for keys
+    for (j = 1; j < c->argc; j++) {
+        robj *o = getKeyValue(c,c->argv[j]);
+        if (o == NULL) {
+            serverLog(LL_DEBUG,"GET Key:%s Value: NULL", (char *)c->argv[j]->ptr);
+            addReply(c,shared.nullbulk);
+        } else {
+            if (o->type != OBJ_STRING) {
+                addReply(c,shared.nullbulk);
+            } else {
+                addReplyBulk(c,o);
+            }
+        }
+    }
+    // serverLog(LL_DEBUG,"%s", group);
+    // int num_keys;
+    // sds *keys = groupToKeys(group, &num_keys);
+    // for (j = 0; j < num_keys; j++) {
+    //     serverLog(LL_DEBUG,"Key %d : %s", j, keys[j]);
+    // }
+    setGroupLRU(c, group);
+    sdsfree(group);
+}
+
 void msetGenericCommand(client *c, int nx) {
     int j;
 
@@ -330,6 +359,34 @@ void msetGenericCommand(client *c, int nx) {
 
 void msetCommand(client *c) {
     msetGenericCommand(c,0);
+}
+
+void gsetCommand(client *c) {
+    if ((c->argc % 2) == 0) {
+        addReplyError(c,"wrong number of arguments for GSET");
+        return;
+    }
+    int j;
+    sds group = keyToGroupsSet((c->argc - 1)/2, &(c->argv[1]));
+    // Multi set for keys
+    for (j = 1; j < c->argc; j += 2) {
+        serverLog(LL_DEBUG,"SET Key:%s Value: %s", (char *)c->argv[j]->ptr, (char *)c->argv[j+1]->ptr);
+        c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+        if (strcmp((char *)(c->argv[j+1]->ptr),"")) {
+        //     serverLog(LL_DEBUG, "NON EMPTY VALUE");
+        //     // Set key value if value is not an empty string
+            setKeyValue(c,c->argv[j],c->argv[j+1]);
+        }
+    }
+    // serverLog(LL_DEBUG,"%s", group);
+    // int num_keys;
+    // sds *keys = groupToKeys(group, &num_keys);
+    // for (j = 0; j < num_keys; j++) {
+    //     serverLog(LL_DEBUG,"Key %d : %s", j, keys[j]);
+    // }
+    serverLog(LL_DEBUG, "SET Group %s", group);
+    setGroupLRU(c, group);
+    sdsfree(group);
 }
 
 void msetnxCommand(client *c) {
@@ -468,4 +525,147 @@ void strlenCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,OBJ_STRING)) return;
     addReplyLongLong(c,stringObjectLen(o));
+}
+
+/* Utils for GroupLRU HT */
+
+void *lookupGroupLRU(client *c, sds group) {
+    return dictFind(c->db->groupLRU,group);
+}
+
+/* Return the LRU stat of the given group, -1 if group doesn't exist in HT */
+long long getGroupLRU(client *c, sds group) {
+    dictEntry *de = lookupGroupLRU(c,group);
+    if (de) {
+        /* Group exists in groupLRU HT */
+        return dictGetSignedIntegerVal(de);
+    } else {
+        return -1;
+    }
+}
+
+/* Sets the group LRU stat to the current LRU time in groupLRU HT 
+ * Updates the reference count of corresponding keys if this is a new group
+ */
+void setGroupLRU(client *c, sds group) {
+    serverLog(LL_DEBUG, "setGroupLRU Group %s", group);
+    dictEntry *de = lookupGroupLRU(c,group);
+    if (de) {
+        /* Group exists in groupLRU HT */
+        dictSetSignedIntegerVal(de,LRU_CLOCK());
+    } else {
+        serverLog(LL_DEBUG, "Group %s added to Group LRU", group);
+        /* Create a new group */
+        sds copy = sdsdup(group);
+        dictEntry *entry = dictAddRaw(c->db->groupLRU,copy,NULL);
+        dictSetSignedIntegerVal(entry,LRU_CLOCK());
+
+        /* Increase reference count of all keys */
+        int num_keys, j;
+        sds *keys = groupToKeys(group, &num_keys);
+        for (j = 0; j < num_keys; j++) {
+            incrKeyRefCount(c, keys[j]);
+        }
+        sdsfreesplitres(keys, num_keys);
+    }
+}
+
+void removeGroup(client *c, sds group) {
+    if (dictDelete(c->db->groupLRU, group) != DICT_OK) {
+        /* ERROR - group not found */
+    }
+    /* Decrease reference count of all keys */
+    int num_keys, j;
+    sds *keys = groupToKeys(group, &num_keys);
+    for (j = 0; j < num_keys; j++) {
+        decrKeyRefCount(c, keys[j]);
+    }
+    sdsfreesplitres(keys, num_keys);
+}
+
+/* Utils for key_value_store HT */
+void *lookupKeyValue(client *c, robj *key) {
+    return dictFind(c->db->key_val_store,key->ptr);
+}
+
+robj *getKeyValue(client *c, robj *key) {
+    dictEntry *de = lookupKeyValue(c,key);
+    if (de) {
+        robj *val = dictGetVal(de);
+        return val;
+    } else {
+        return NULL;
+    }
+}
+
+void setKeyValue(client *c, robj *key, robj *val) {
+    dictEntry *de, *kde;
+    de = lookupKeyValue(c, key);
+    if (de) {
+        /* Key exists. Update Value */
+        dictEntry auxentry = *de;
+        dictSetVal(c->db->key_val_store, de, val);
+        /* Free old value */
+        dictFreeVal(c->db->key_val_store, &auxentry);
+    } else {
+        serverLog(LL_DEBUG, "Key %s added to Key Value Store", (char *)key->ptr);
+        /* Key doesn't exist. Add a new key value pair */
+        kde = dictFind(c->db->key_ref_count,key);
+        if (kde) {
+            /* Reuse the sds from the key_ref_count dict in this dict */
+            int retval = dictAdd(c->db->key_val_store, dictGetKey(kde), val);
+            serverAssertWithInfo(NULL,key,retval == DICT_OK);
+        } else {
+            /* Create a copy of the key */ 
+            sds copy = sdsdup(key->ptr);
+            int retval = dictAdd(c->db->key_val_store, copy, val);
+            serverAssertWithInfo(NULL,key,retval == DICT_OK);
+        }
+    }
+}
+
+/* Utils for key_ref_count HT */
+void *lookupKeyRef(client *c, void *key) {
+    return dictFind(c->db->key_ref_count,key);
+}
+
+/* Add to delta to the value pointed to by key in key_ref_count HT 
+ * Deletes the key from key_value_store and key_ref_count if
+ * reference count drops to 0
+ */
+void updateRefCount(client *c, void *key, long long delta) {
+    dictEntry *kde, *de;
+    de = lookupKeyRef(c,key);
+    if (de) {
+        /* Key exists in key_ref_count HT */
+        long long oldval = dictGetSignedIntegerVal(de);
+        long long newval = oldval + delta;
+        if (newval == 0) {
+            dictDelete(c->db->key_val_store, key);
+            dictDelete(c->db->key_ref_count, key);
+        } else {
+            dictSetSignedIntegerVal(de,newval);
+        }
+    } else {
+        serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
+        /* Reuse the sds from the key_value dict in this dict */
+        kde = dictFind(c->db->key_val_store,key);
+        dictEntry *entry;
+        if (kde) {
+            entry = dictAddRaw(c->db->key_ref_count,dictGetKey(kde),NULL);
+        } else {
+            /* Create a copy of the key */ 
+            sds copy = sdsdup(key);
+            entry = dictAddRaw(c->db->key_ref_count,copy,NULL);
+        }
+        dictSetSignedIntegerVal(entry,delta);
+    }
+}
+
+void incrKeyRefCount(client *c, void *key) {
+    updateRefCount(c, key, 1);
+}
+
+void decrKeyRefCount(client *c, void *key) {
+    updateRefCount(c, key, -1);
 }

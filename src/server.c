@@ -145,6 +145,7 @@ struct redisCommand redisCommandTable[] = {
     {"incr",incrCommand,2,"wmF",0,NULL,1,1,1,0,0},
     {"decr",decrCommand,2,"wmF",0,NULL,1,1,1,0,0},
     {"mget",mgetCommand,-2,"rF",0,NULL,1,-1,1,0,0},
+    {"gget",ggetCommand,-1,"wmF",0,NULL,1,-1,1,0,0},
     {"rpush",rpushCommand,-3,"wmF",0,NULL,1,1,1,0,0},
     {"lpush",lpushCommand,-3,"wmF",0,NULL,1,1,1,0,0},
     {"rpushx",rpushxCommand,-3,"wmF",0,NULL,1,1,1,0,0},
@@ -222,6 +223,7 @@ struct redisCommand redisCommandTable[] = {
     {"incrbyfloat",incrbyfloatCommand,3,"wmF",0,NULL,1,1,1,0,0},
     {"getset",getsetCommand,3,"wm",0,NULL,1,1,1,0,0},
     {"mset",msetCommand,-3,"wm",0,NULL,1,-1,2,0,0},
+    {"gset",gsetCommand,-3,"wm",0,NULL,1,-1,2,0,0},
     {"msetnx",msetnxCommand,-3,"wm",0,NULL,1,-1,2,0,0},
     {"randomkey",randomkeyCommand,1,"rR",0,NULL,0,0,0,0,0},
     {"select",selectCommand,2,"lF",0,NULL,0,0,0,0,0},
@@ -743,6 +745,8 @@ void tryResizeHashTables(int dbid) {
         dictResize(server.db[dbid].dict);
     if (htNeedsResize(server.db[dbid].expires))
         dictResize(server.db[dbid].expires);
+    if (htNeedsResize(server.db[dbid].groupLRU))
+        dictResize(server.db[dbid].groupLRU);
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -761,6 +765,21 @@ int incrementallyRehash(int dbid) {
     /* Expires */
     if (dictIsRehashing(server.db[dbid].expires)) {
         dictRehashMilliseconds(server.db[dbid].expires,1);
+        return 1; /* already used our millisecond for this loop... */
+    }
+    /* Group LRU */
+    if (dictIsRehashing(server.db[dbid].groupLRU)) {
+        dictRehashMilliseconds(server.db[dbid].groupLRU,1);
+        return 1; /* already used our millisecond for this loop... */
+    }
+    /* Key Value */
+    if (dictIsRehashing(server.db[dbid].key_val_store)) {
+        dictRehashMilliseconds(server.db[dbid].key_val_store,1);
+        return 1; /* already used our millisecond for this loop... */
+    }
+    /* Key Reference Count */
+    if (dictIsRehashing(server.db[dbid].key_ref_count)) {
+        dictRehashMilliseconds(server.db[dbid].key_ref_count,1);
         return 1; /* already used our millisecond for this loop... */
     }
     return 0;
@@ -1179,13 +1198,19 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Show some info about non-empty databases */
     run_with_period(5000) {
         for (j = 0; j < server.dbnum; j++) {
-            long long size, used, vkeys;
+            long long size, used, vkeys, num_groups, num_keys, num_key_refs;
 
             size = dictSlots(server.db[j].dict);
             used = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
+            num_groups = dictSize(server.db[j].groupLRU);
+            num_keys = dictSize(server.db[j].key_val_store);
+            num_key_refs = dictSize(server.db[j].key_ref_count);
             if (used || vkeys) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
+                serverLog(LL_VERBOSE,"%lld groups in group HT.",num_groups);
+                serverLog(LL_VERBOSE,"%lld keys in key_value_store HT.",num_keys);
+                serverLog(LL_VERBOSE,"%lld key_refs in key_ref_count HT.",num_key_refs);
                 /* dictPrintStats(server.dict); */
             }
         }
@@ -2077,6 +2102,9 @@ void initServer(void) {
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
+        server.db[j].groupLRU = dictCreate(&keyptrDictType,NULL);
+        server.db[j].key_val_store = dictCreate(&dbDictType,NULL);
+        server.db[j].key_ref_count = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
         server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
@@ -3626,14 +3654,17 @@ sds genRedisInfoString(char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < server.dbnum; j++) {
-            long long keys, vkeys;
+            long long keys, vkeys, num_groups, num_keys, key_refs;
 
             keys = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
+            num_groups = dictSize(server.db[j].groupLRU);
+            num_keys = dictSize(server.db[j].key_val_store);
+            key_refs = dictSize(server.db[j].key_ref_count);
             if (keys || vkeys) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
-                    j, keys, vkeys, server.db[j].avg_ttl);
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,groups=%lld\r\n",
+                    j, keys, vkeys, server.db[j].avg_ttl, num_groups);
             }
         }
     }
@@ -4199,4 +4230,36 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+/* Concatenate list of keys into a string separated by "\t" */
+sds keyToGroupsGet(int numKeys, robj **keys) {
+    sds group = sdsnew(NULL);
+    for (int i = 0; i < numKeys; i++) {
+        group = sdscat(group, (const char *)(keys[i]->ptr));
+        if (i < numKeys - 1) {
+            group = sdscat(group, "\t");
+        }
+    }
+    return group;
+}
+
+sds keyToGroupsSet(int numKeys, robj **keys) {
+    sds group = sdsnew(NULL);
+    serverLog(LL_DEBUG, "CAT %d", numKeys);
+    for (int i = 0, j = 0; i < numKeys; i++, j += 2) {
+        group = sdscat(group, (const char *)(keys[j]->ptr));
+        if (i < numKeys - 1) {
+            group = sdscat(group, "\t");
+        }
+        serverLog(LL_DEBUG, "CATKEY %s", (const char *)(keys[j]->ptr));
+    }
+    return group;
+}
+
+/* Split a group into a list of keys.
+* The caller should free the resulting array of sds strings with
+* sdsfreesplitres().
+*/
+sds *groupToKeys(sds group, int *num_keys) {
+    return sdssplitargs(group, num_keys);
+}
 /* The End */

@@ -636,6 +636,9 @@ typedef struct clientReplyBlock {
 typedef struct redisDb {
     dict *dict;                 /* The keyspace for this DB */
     dict *expires;              /* Timeout of keys with a timeout set */
+    dict *groupLRU;             /* LRU stats for a key group (sds-> ull)*/
+    dict *key_val_store;        /* Key value pairs (robj -> robj)*/
+    dict *key_ref_count;        /* Reference count for key (robj-> ull)*/
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
@@ -2000,6 +2003,7 @@ void lremCommand(client *c);
 void rpoplpushCommand(client *c);
 void infoCommand(client *c);
 void mgetCommand(client *c);
+void ggetCommand(client *c);
 void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);
@@ -2014,6 +2018,7 @@ void replicaofCommand(client *c);
 void roleCommand(client *c);
 void debugCommand(client *c);
 void msetCommand(client *c);
+void gsetCommand(client *c);
 void msetnxCommand(client *c);
 void zaddCommand(client *c);
 void zincrbyCommand(client *c);
@@ -2153,3 +2158,19 @@ void xorDigest(unsigned char *digest, void *ptr, size_t len);
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 #endif
+
+/* Utils for key list into group id and vice versa */
+sds keyToGroupsGet(int num_keys, robj **keys);
+sds keyToGroupsSet(int num_keys, robj **keys);
+sds *groupToKeys(sds group, int *num_keys);
+
+/* Utils for key, group and key_ref_count HT manipulation */
+long long getGroupLRU(client *c, sds group);
+void setGroupLRU(client *c, sds group);
+void removeGroup(client *c, sds group);
+
+robj *getKeyValue(client *c, robj *key);
+void setKeyValue(client *c, robj *key, robj *val);
+
+void incrKeyRefCount(client *c, void *key);
+void decrKeyRefCount(client *c, void *key);
