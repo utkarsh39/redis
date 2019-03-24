@@ -304,7 +304,7 @@ void ggetCommand(client *c) {
     int j;
     sds group = keyToGroupsGet(c->argc - 1, &(c->argv[1]));
 
-    
+    addReplyMultiBulkLen(c,c->argc-1);
     // Multi Get for keys
     for (j = 1; j < c->argc; j++) {
         robj *o = getKeyValue(c,c->argv[j]);
@@ -370,23 +370,16 @@ void gsetCommand(client *c) {
     sds group = keyToGroupsSet((c->argc - 1)/2, &(c->argv[1]));
     // Multi set for keys
     for (j = 1; j < c->argc; j += 2) {
-        serverLog(LL_DEBUG,"SET Key:%s Value: %s", (char *)c->argv[j]->ptr, (char *)c->argv[j+1]->ptr);
-        c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
-        if (strcmp((char *)(c->argv[j+1]->ptr),"")) {
-        //     serverLog(LL_DEBUG, "NON EMPTY VALUE");
-        //     // Set key value if value is not an empty string
+        if (sdslen(c->argv[j+1]->ptr)) {
+            c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+            // Set key value if value is not an empty string
             setKeyValue(c,c->argv[j],c->argv[j+1]);
         }
     }
-    // serverLog(LL_DEBUG,"%s", group);
-    // int num_keys;
-    // sds *keys = groupToKeys(group, &num_keys);
-    // for (j = 0; j < num_keys; j++) {
-    //     serverLog(LL_DEBUG,"Key %d : %s", j, keys[j]);
-    // }
     serverLog(LL_DEBUG, "SET Group %s", group);
     setGroupLRU(c, group);
     sdsfree(group);
+    addReply(c, shared.ok);
 }
 
 void msetnxCommand(client *c) {
