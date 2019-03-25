@@ -100,6 +100,19 @@ unsigned long long estimateObjectIdleTime(robj *o) {
     }
 }
 
+/* Given a group returns the min number of milliseconds the group was never
+ * requested, using an approximated LRU algorithm. */
+unsigned long long estimateGroupIdleTime(dictEntry *de) {
+    unsigned long long groupLRU = dictGetSignedIntegerVal(de);
+    unsigned long long lruclock = LRU_CLOCK();
+    if (lruclock >= groupLRU) {
+        return (lruclock - groupLRU) * LRU_CLOCK_RESOLUTION;
+    } else {
+        return (lruclock + (LRU_CLOCK_MAX - groupLRU)) *
+                    LRU_CLOCK_RESOLUTION;
+    }
+}
+
 /* freeMemoryIfNeeded() gets called when 'maxmemory' is set on the config
  * file to limit the max memory used by the server, before processing a
  * command.
@@ -291,7 +304,6 @@ void groupEvictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         sds key;
-        robj *o;
         dictEntry *de;
 
         de = samples[j];
@@ -302,29 +314,9 @@ void groupEvictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct
          * again in the key dictionary to obtain the value object. */
         if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
             if (sampledict != keydict) de = dictFind(keydict, key);
-            o = dictGetVal(de);
         }
 
-        /* Calculate the idle time according to the policy. This is called
-         * idle just because the code initially handled LRU, but is in fact
-         * just a score where an higher score means better candidate. */
-        if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-            idle = estimateObjectIdleTime(o);
-        } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-            /* When we use an LRU policy, we sort the keys by idle time
-             * so that we expire keys starting from greater idle time.
-             * However when the policy is an LFU one, we have a frequency
-             * estimation, and we want to evict keys with lower frequency
-             * first. So inside the pool we put objects using the inverted
-             * frequency subtracting the actual frequency to the maximum
-             * frequency of 255. */
-            idle = 255-LFUDecrAndReturn(o);
-        } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
-            /* In this case the sooner the expire the better. */
-            idle = ULLONG_MAX - (long)dictGetVal(de);
-        } else {
-            serverPanic("Unknown eviction policy in groupEvictionPoolPopulate()");
-        }
+        idle = estimateGroupIdleTime(de);
 
         /* Insert the element inside the pool.
          * First, find the first empty bucket or the first populated
