@@ -592,8 +592,7 @@ robj *getKeyValue(client *c, robj *key) {
 }
 
 void setKeyValue(client *c, robj *key, robj *val) {
-    dictEntry *de, *kde;
-    de = lookupKeyValue(c, key);
+    dictEntry *de = lookupKeyValue(c, key);
     if (de) {
         /* Key exists. Update Value */
         dictEntry auxentry = *de;
@@ -603,17 +602,10 @@ void setKeyValue(client *c, robj *key, robj *val) {
     } else {
         serverLog(LL_DEBUG, "Key %s added to Key Value Store", (char *)key->ptr);
         /* Key doesn't exist. Add a new key value pair */
-        kde = dictFind(c->db->key_ref_count,key);
-        if (kde) {
-            /* Reuse the sds from the key_ref_count dict in this dict */
-            int retval = dictAdd(c->db->key_val_store, dictGetKey(kde), val);
-            serverAssertWithInfo(NULL,key,retval == DICT_OK);
-        } else {
-            /* Create a copy of the key */ 
-            sds copy = sdsdup(key->ptr);
-            int retval = dictAdd(c->db->key_val_store, copy, val);
-            serverAssertWithInfo(NULL,key,retval == DICT_OK);
-        }
+        /* Create a copy of the key */
+        sds copy = sdsdup(key->ptr);
+        int retval = dictAdd(c->db->key_val_store, copy, val);
+        serverAssertWithInfo(NULL,key,retval == DICT_OK);
     }
 }
 
@@ -627,8 +619,7 @@ void *lookupKeyRef(client *c, void *key) {
  * reference count drops to 0
  */
 void updateRefCount(client *c, void *key, long long delta) {
-    dictEntry *kde, *de;
-    de = lookupKeyRef(c,key);
+    dictEntry *de = lookupKeyRef(c,key);
     if (de) {
         /* Key exists in key_ref_count HT */
         long long oldval = dictGetSignedIntegerVal(de);
@@ -641,16 +632,9 @@ void updateRefCount(client *c, void *key, long long delta) {
         }
     } else {
         serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
-        /* Reuse the sds from the key_value dict in this dict */
-        kde = dictFind(c->db->key_val_store,key);
-        dictEntry *entry;
-        if (kde) {
-            entry = dictAddRaw(c->db->key_ref_count,dictGetKey(kde),NULL);
-        } else {
-            /* Create a copy of the key */ 
-            sds copy = sdsdup(key);
-            entry = dictAddRaw(c->db->key_ref_count,copy,NULL);
-        }
+        /* Create a copy of the key */
+        sds copy = sdsdup(key);
+        dictEntry *entry = dictAddRaw(c->db->key_ref_count,copy,NULL);
         dictSetSignedIntegerVal(entry,delta);
     }
 }
