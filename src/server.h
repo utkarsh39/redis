@@ -2165,12 +2165,12 @@ sds keyToGroupsSet(int num_keys, robj **keys);
 sds *groupToKeys(sds group, int *num_keys);
 
 /* Utils for key, group and key_ref_count HT manipulation */
-long long getGroupLRU(client *c, sds group);
-void setGroupLRU(client *c, sds group);
-void removeGroup(client *c, sds group);
+long long getGroupLRU(redisDb *db, sds group);
+void setGroupLRU(redisDb *db, sds group);
+void removeGroup(redisDb *db, sds group);
 
-robj *getKeyValue(client *c, robj *key);
-void setKeyValue(client *c, robj *key, robj *val);
+robj *getKeyValue(redisDb *db, robj *key);
+void setKeyValue(redisDb *db, robj *key, robj *val);
 
-void incrKeyRefCount(client *c, void *key);
-void decrKeyRefCount(client *c, void *key);
+void incrKeyRefCount(redisDb *db, void *key);
+void decrKeyRefCount(redisDb *db, void *key);
