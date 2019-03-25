@@ -632,11 +632,13 @@ void updateRefCount(redisDb *db, void *key, long long delta) {
             dictSetSignedIntegerVal(de,newval);
         }
     } else {
-        serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
-        /* Create a copy of the key */
-        sds copy = sdsdup(key);
-        dictEntry *entry = dictAddRaw(db->key_ref_count,copy,NULL);
-        dictSetSignedIntegerVal(entry,delta);
+        if (delta > 0) {
+            serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
+            /* Create a copy of the key */
+            sds copy = sdsdup(key);
+            dictEntry *entry = dictAddRaw(db->key_ref_count,copy,NULL);
+            dictSetSignedIntegerVal(entry,delta);
+        }
     }
 }
 
