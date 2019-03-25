@@ -2113,6 +2113,7 @@ void initServer(void) {
         server.db[j].defrag_later = listCreate();
     }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
+    groupEvictionPoolAlloc(); /* Initialize the LRU groups pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();
     listSetFreeMethod(server.pubsub_patterns,freePubsubPattern);

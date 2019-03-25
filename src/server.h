@@ -1363,6 +1363,8 @@ typedef struct {
     dictEntry *de;
 } hashTypeIterator;
 
+static struct evictionPoolEntry *GroupEvictionPoolLRU;
+
 #include "stream.h"  /* Stream data type header file. */
 
 #define OBJ_HASH_KEY 1
@@ -1916,6 +1918,7 @@ size_t getSlaveKeyWithExpireCount(void);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);
+void groupEvictionPoolAlloc(void);
 #define LFU_INIT_VAL 5
 unsigned long LFUGetTimeInMinutes(void);
 uint8_t LFULogIncr(uint8_t value);
@@ -2174,3 +2177,5 @@ void setKeyValue(redisDb *db, robj *key, robj *val);
 
 void incrKeyRefCount(redisDb *db, void *key);
 void decrKeyRefCount(redisDb *db, void *key);
+
+void groupEvictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool);

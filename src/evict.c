@@ -51,6 +51,8 @@
  * Empty entries have the key pointer set to NULL. */
 #define EVPOOL_SIZE 16
 #define EVPOOL_CACHED_SDS_SIZE 255
+#define GROUP_EVPOOL_SIZE 16
+#define GROUP_EVPOOL_CACHED_SDS_SIZE 255
 struct evictionPoolEntry {
     unsigned long long idle;    /* Object idle time (inverse frequency for LFU) */
     sds key;                    /* Key name. */
@@ -59,6 +61,7 @@ struct evictionPoolEntry {
 };
 
 static struct evictionPoolEntry *EvictionPoolLRU;
+// static struct evictionPoolEntry *GroupEvictionPoolLRU;
 
 /* ----------------------------------------------------------------------------
  * Implementation of eviction, aging and LRU
@@ -150,6 +153,21 @@ void evictionPoolAlloc(void) {
     EvictionPoolLRU = ep;
 }
 
+/* Create a new group eviction pool. */
+void groupEvictionPoolAlloc(void) {
+    struct evictionPoolEntry *ep;
+    int j;
+
+    ep = zmalloc(sizeof(*ep)*GROUP_EVPOOL_SIZE);
+    for (j = 0; j < EVPOOL_SIZE; j++) {
+        ep[j].idle = 0;
+        ep[j].key = NULL;
+        ep[j].cached = sdsnewlen(NULL,GROUP_EVPOOL_CACHED_SDS_SIZE);
+        ep[j].dbid = 0;
+    }
+    GroupEvictionPoolLRU = ep;
+}
+
 /* This is an helper function for freeMemoryIfNeeded(), it is used in order
  * to populate the evictionPool with a few entries every time we want to
  * expire a key. Keys with idle time smaller than one of the current
@@ -238,13 +256,119 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
                 pool[k].cached = cached;
             }
         }
-
+        serverLog(LL_DEBUG,"Adding %s to group eviction pool", key);
         /* Try to reuse the cached SDS string allocated in the pool entry,
          * because allocating and deallocating this object is costly
          * (according to the profiler, not my fantasy. Remember:
          * premature optimizbla bla bla bla. */
         int klen = sdslen(key);
         if (klen > EVPOOL_CACHED_SDS_SIZE) {
+            pool[k].key = sdsdup(key);
+        } else {
+            memcpy(pool[k].cached,key,klen+1);
+            sdssetlen(pool[k].cached,klen);
+            pool[k].key = pool[k].cached;
+        }
+        pool[k].idle = idle;
+        pool[k].dbid = dbid;
+    }
+}
+
+/* This is an helper function for freeMemoryIfNeeded(), it is used in order
+ * to populate the groupEvictionPool with a few entries every time we want to
+ * expire a key. Groups with idle time smaller than one of the current
+ * groups are added. Groups are always added if there are free entries.
+ *
+ * We insert groups on place in ascending order, so groups with the smaller
+ * idle time are on the left, and groups with the higher idle time on the
+ * right. */
+
+void groupEvictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
+    int j, k, count;
+    dictEntry *samples[server.maxmemory_samples];
+
+    count = dictGetSomeKeys(sampledict,samples,server.maxmemory_samples);
+    for (j = 0; j < count; j++) {
+        unsigned long long idle;
+        sds key;
+        robj *o;
+        dictEntry *de;
+
+        de = samples[j];
+        key = dictGetKey(de);
+
+        /* If the dictionary we are sampling from is not the main
+         * dictionary (but the expires one) we need to lookup the key
+         * again in the key dictionary to obtain the value object. */
+        if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
+            if (sampledict != keydict) de = dictFind(keydict, key);
+            o = dictGetVal(de);
+        }
+
+        /* Calculate the idle time according to the policy. This is called
+         * idle just because the code initially handled LRU, but is in fact
+         * just a score where an higher score means better candidate. */
+        if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+            idle = estimateObjectIdleTime(o);
+        } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            /* When we use an LRU policy, we sort the keys by idle time
+             * so that we expire keys starting from greater idle time.
+             * However when the policy is an LFU one, we have a frequency
+             * estimation, and we want to evict keys with lower frequency
+             * first. So inside the pool we put objects using the inverted
+             * frequency subtracting the actual frequency to the maximum
+             * frequency of 255. */
+            idle = 255-LFUDecrAndReturn(o);
+        } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
+            /* In this case the sooner the expire the better. */
+            idle = ULLONG_MAX - (long)dictGetVal(de);
+        } else {
+            serverPanic("Unknown eviction policy in groupEvictionPoolPopulate()");
+        }
+
+        /* Insert the element inside the pool.
+         * First, find the first empty bucket or the first populated
+         * bucket that has an idle time smaller than our idle time. */
+        k = 0;
+        while (k < GROUP_EVPOOL_SIZE &&
+               pool[k].key &&
+               pool[k].idle < idle) k++;
+        if (k == 0 && pool[GROUP_EVPOOL_SIZE-1].key != NULL) {
+            /* Can't insert if the element is < the worst element we have
+             * and there are no empty buckets. */
+            continue;
+        } else if (k < GROUP_EVPOOL_SIZE && pool[k].key == NULL) {
+            /* Inserting into empty position. No setup needed before insert. */
+        } else {
+            /* Inserting in the middle. Now k points to the first element
+             * greater than the element to insert.  */
+            if (pool[GROUP_EVPOOL_SIZE-1].key == NULL) {
+                /* Free space on the right? Insert at k shifting
+                 * all the elements from k to end to the right. */
+
+                /* Save SDS before overwriting. */
+                sds cached = pool[GROUP_EVPOOL_SIZE-1].cached;
+                memmove(pool+k+1,pool+k,
+                    sizeof(pool[0])*(GROUP_EVPOOL_SIZE-k-1));
+                pool[k].cached = cached;
+            } else {
+                /* No free space on right? Insert at k-1 */
+                k--;
+                /* Shift all elements on the left of k (included) to the
+                 * left, so we discard the element with smaller idle time. */
+                sds cached = pool[0].cached; /* Save SDS before overwriting. */
+                if (pool[0].key != pool[0].cached) sdsfree(pool[0].key);
+                memmove(pool,pool+1,sizeof(pool[0])*k);
+                pool[k].cached = cached;
+            }
+        }
+
+        /* Try to reuse the cached SDS string allocated in the pool entry,
+         * because allocating and deallocating this object is costly
+         * (according to the profiler, not my fantasy. Remember:
+         * premature optimizbla bla bla bla. */
+        int klen = sdslen(key);
+        if (klen > GROUP_EVPOOL_CACHED_SDS_SIZE) {
             pool[k].key = sdsdup(key);
         } else {
             memcpy(pool[k].cached,key,klen+1);
@@ -470,7 +594,9 @@ int freeMemoryIfNeeded(void) {
         int j, k, i, keys_freed = 0;
         static unsigned int next_db = 0;
         sds bestkey = NULL;
+        sds bestgroup = NULL;
         int bestdbid;
+        int bestgroupdbid;
         redisDb *db;
         dict *dict;
         dictEntry *de;
@@ -479,9 +605,11 @@ int freeMemoryIfNeeded(void) {
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
         {
             struct evictionPoolEntry *pool = EvictionPoolLRU;
+            struct evictionPoolEntry *groupPool = GroupEvictionPoolLRU;
 
-            while(bestkey == NULL) {
+            while(bestkey == NULL && bestgroup == NULL) {
                 unsigned long total_keys = 0, keys;
+                unsigned long total_groups = 0, groups;
 
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
@@ -495,7 +623,15 @@ int freeMemoryIfNeeded(void) {
                         total_keys += keys;
                     }
                 }
+                db = server.db;
+                dict = db->groupLRU;
+                if ((groups = dictSize(dict)) != 0) {
+                    groupEvictionPoolPopulate(0, dict, dict, groupPool);
+                    total_groups += groups;
+                }
+
                 if (!total_keys) break; /* No keys to evict. */
+                if (!total_groups) break; /* No groups to evict. */
 
                 /* Go backward from best to worst element to evict. */
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
@@ -520,6 +656,28 @@ int freeMemoryIfNeeded(void) {
                      * a ghost and we need to try the next element. */
                     if (de) {
                         bestkey = dictGetKey(de);
+                        break;
+                    } else {
+                        /* Ghost... Iterate again. */
+                    }
+                }
+                /* Go backward from best to worst element to evict. */
+                for (k = GROUP_EVPOOL_SIZE-1; k >= 0; k--) {
+                    if (groupPool[k].key == NULL) continue;
+                    bestgroupdbid = groupPool[k].dbid;
+                    de  = dictFind(server.db[groupPool[k].dbid].groupLRU,
+                            groupPool[k].key);
+
+                    /* Remove the entry from the groupPool. */
+                    if (groupPool[k].key != groupPool[k].cached)
+                        sdsfree(groupPool[k].key);
+                    groupPool[k].key = NULL;
+                    groupPool[k].idle = 0;
+
+                    /* If the group exists, is our pick. Otherwise it is
+                     * a ghost and we need to try the next element. */
+                    if (de) {
+                        bestgroup = dictGetKey(de);
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -600,6 +758,11 @@ int freeMemoryIfNeeded(void) {
             }
         }
 
+        /* Finally remove the selected group. */
+        if (bestgroup) {
+            db = server.db+bestgroupdbid;
+            removeGroup(server.db, bestgroup);
+        }
         if (!keys_freed) {
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("eviction-cycle",latency);

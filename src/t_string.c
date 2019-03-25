@@ -325,6 +325,7 @@ void ggetCommand(client *c) {
     // for (j = 0; j < num_keys; j++) {
     //     serverLog(LL_DEBUG,"Key %d : %s", j, keys[j]);
     // }
+    groupEvictionPoolPopulate(0, c->db->groupLRU, c->db->groupLRU, GroupEvictionPoolLRU);
     setGroupLRU(c->db, group);
     sdsfree(group);
 }
@@ -632,11 +633,13 @@ void updateRefCount(redisDb *db, void *key, long long delta) {
             dictSetSignedIntegerVal(de,newval);
         }
     } else {
-        serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
-        /* Create a copy of the key */
-        sds copy = sdsdup(key);
-        dictEntry *entry = dictAddRaw(db->key_ref_count,copy,NULL);
-        dictSetSignedIntegerVal(entry,delta);
+        if(delta > 0) {
+            serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
+            /* Create a copy of the key */
+            sds copy = sdsdup(key);
+            dictEntry *entry = dictAddRaw(db->key_ref_count,copy,NULL);
+            dictSetSignedIntegerVal(entry,delta);
+        }
     }
 }
 
