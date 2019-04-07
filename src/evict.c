@@ -622,9 +622,7 @@ int freeMemoryIfNeeded(void) {
                     total_groups += groups;
                 }
 
-                if (!total_keys) break; /* No keys to evict. */
-                if (!total_groups) break; /* No groups to evict. */
-
+                if (!total_keys && !total_groups) break; /* No keys and group to evict. */
                 /* Go backward from best to worst element to evict. */
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
                     if (pool[k].key == NULL) continue;
