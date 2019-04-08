@@ -757,7 +757,7 @@ int freeMemoryIfNeeded(void) {
             delta -= (long long) zmalloc_used_memory();
             mem_freed += delta;
             if (delta) {
-                serverLog(LL_VERBOSE, "Freed %lld memory", delta);
+                serverLog(LL_DEBUG, "Freed %lld memory", delta);
             }
             groups_freed++;
         }
