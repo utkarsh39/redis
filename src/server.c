@@ -747,6 +747,8 @@ void tryResizeHashTables(int dbid) {
         dictResize(server.db[dbid].expires);
     if (htNeedsResize(server.db[dbid].groupLRU))
         dictResize(server.db[dbid].groupLRU);
+    if (htNeedsResize(server.db[dbid].groupLRU))
+        dictResize(server.db[dbid].key_ref_count);
 }
 
 /* Our hash table implementation performs rehashing incrementally while
@@ -770,11 +772,6 @@ int incrementallyRehash(int dbid) {
     /* Group LRU */
     if (dictIsRehashing(server.db[dbid].groupLRU)) {
         dictRehashMilliseconds(server.db[dbid].groupLRU,1);
-        return 1; /* already used our millisecond for this loop... */
-    }
-    /* Key Value */
-    if (dictIsRehashing(server.db[dbid].key_val_store)) {
-        dictRehashMilliseconds(server.db[dbid].key_val_store,1);
         return 1; /* already used our millisecond for this loop... */
     }
     /* Key Reference Count */
@@ -1204,9 +1201,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             used = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
             num_groups = dictSize(server.db[j].groupLRU);
-            num_keys = dictSize(server.db[j].key_val_store);
             num_key_refs = dictSize(server.db[j].key_ref_count);
-            if (used || vkeys) {
+            if (used || vkeys || num_groups || num_key_refs) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 serverLog(LL_VERBOSE,"%lld groups in group HT.",num_groups);
                 serverLog(LL_VERBOSE,"%lld keys in key_value_store HT.",num_keys);
@@ -2106,7 +2102,6 @@ void initServer(void) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].groupLRU = dictCreate(&keyptrDictType,NULL);
-        server.db[j].key_val_store = dictCreate(&dbDictType,NULL);
         server.db[j].key_ref_count = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
@@ -3669,12 +3664,11 @@ sds genRedisInfoString(char *section) {
             keys = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
             num_groups = dictSize(server.db[j].groupLRU);
-            num_keys = dictSize(server.db[j].key_val_store);
             key_refs = dictSize(server.db[j].key_ref_count);
-            if (keys || vkeys) {
+            if (keys || vkeys || num_groups || key_refs) {
                 info = sdscatprintf(info,
-                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,groups=%lld\r\n",
-                    j, keys, vkeys, server.db[j].avg_ttl, num_groups);
+                    "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,groups=%lld,"
+                    "key_refs\r\n",j, keys, vkeys, server.db[j].avg_ttl, num_groups, key_refs);
             }
         }
     }

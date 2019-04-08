@@ -326,7 +326,6 @@ void ggetCommand(client *c) {
         server.stat_groupspace_hits++;
     }
     // serverLog(LL_DEBUG,"GET Group %s", group);
-    int num_keys;
     setGroupLRU(c->db, group);
     sdsfree(group);
 }
@@ -374,12 +373,8 @@ void gsetCommand(client *c) {
     for (j = 1; j < c->argc; j += 2) {
         // if (sdslen(c->argv[j+1]->ptr)) {
             c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
-            // serverLog(LL_DEBUG, "Object Encoding %u",c->argv[j+1]->type);
             // Set key value if value is not an empty string
             setKey(c->db,c->argv[j],c->argv[j+1]);
-        // } else {
-        //     serverLog(LL_DEBUG, "SET KEY length 0 ");
-        // }
     }
     // serverLog(LL_DEBUG, "SET Groupppppp %s", group);
     setGroupLRU(c->db, group);
@@ -546,13 +541,11 @@ long long getGroupLRU(redisDb *db, sds group) {
  * Updates the reference count of corresponding keys if this is a new group
  */
 void setGroupLRU(redisDb *db, sds group) {
-    // serverLog(LL_DEBUG, "setGroupLRU Group %s", group);
     dictEntry *de = lookupGroupLRU(db,group);
     if (de) {
         /* Group exists in groupLRU HT */
         dictSetSignedIntegerVal(de,LRU_CLOCK());
     } else {
-        // serverLog(LL_DEBUG, "Group %s added to Group LRU", group);
         /* Create a new group */
         sds copy = sdsdup(group);
         dictEntry *entry = dictAddRaw(db->groupLRU,copy,NULL);
@@ -626,7 +619,6 @@ void updateRefCount(redisDb *db, void *key, long long delta) {
         }
     } else {
         if (delta > 0) {
-            // serverLog(LL_DEBUG, "Key %s added to Key Ref Count", (char *)key);
             /* Create a copy of the key */
             sds copy = sdsdup(key);
             dictEntry *entry = dictAddRaw(db->key_ref_count,copy,NULL);
