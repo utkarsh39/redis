@@ -1008,6 +1008,9 @@ struct redisServer {
     long long stat_evictedkeys;     /* Number of evicted keys (maxmemory) */
     long long stat_keyspace_hits;   /* Number of successful lookups of keys */
     long long stat_keyspace_misses; /* Number of failed lookups of keys */
+    long long stat_evictedgroups;     /* Number of evicted groups (maxmemory) */
+    long long stat_groupspace_hits;   /* Number of successful lookups of groups */
+    long long stat_groupspace_misses; /* Number of failed lookups of groups */
     long long stat_active_defrag_hits;      /* number of allocations moved */
     long long stat_active_defrag_misses;    /* number of allocations scanned but not moved */
     long long stat_active_defrag_key_hits;  /* number of keys with moved allocations */

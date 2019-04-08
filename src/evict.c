@@ -583,7 +583,7 @@ int freeMemoryIfNeeded(void) {
 
     latencyStartMonitor(latency);
     while (mem_freed < mem_tofree) {
-        int j, k, i, keys_freed = 0;
+        int j, k, i, keys_freed = 0, groups_freed = 0;
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         sds bestgroup = NULL;
@@ -606,15 +606,15 @@ int freeMemoryIfNeeded(void) {
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
-                for (i = 0; i < server.dbnum; i++) {
-                    db = server.db+i;
-                    dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
-                            db->dict : db->expires;
-                    if ((keys = dictSize(dict)) != 0) {
-                        evictionPoolPopulate(i, dict, db->dict, pool);
-                        total_keys += keys;
-                    }
-                }
+                // for (i = 0; i < server.dbnum; i++) {
+                    // db = server.db+i;
+                    // dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
+                    //         db->dict : db->expires;
+                    // if ((keys = dictSize(dict)) != 0) {
+                    //     evictionPoolPopulate(i, dict, db->dict, pool);
+                    //     total_keys += keys;
+                    // }
+                // }
                 db = server.db;
                 dict = db->groupLRU;
                 if ((groups = dictSize(dict)) != 0) {
@@ -623,6 +623,7 @@ int freeMemoryIfNeeded(void) {
                 }
 
                 if (!total_keys && !total_groups) break; /* No keys and group to evict. */
+                // serverLog(LL_DEBUG, "Evict Keys: %d Groups: %d", total_keys, total_groups);
                 /* Go backward from best to worst element to evict. */
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
                     if (pool[k].key == NULL) continue;
@@ -750,10 +751,17 @@ int freeMemoryIfNeeded(void) {
 
         /* Finally remove the selected group. */
         if (bestgroup) {
+            delta = (long long) zmalloc_used_memory();
             db = server.db+bestgroupdbid;
             removeGroup(server.db, bestgroup);
+            delta -= (long long) zmalloc_used_memory();
+            mem_freed += delta;
+            if (delta) {
+                serverLog(LL_VERBOSE, "Freed %lld memory", delta);
+            }
+            groups_freed++;
         }
-        if (!keys_freed) {
+        if (!keys_freed && !groups_freed) {
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("eviction-cycle",latency);
             goto cant_free; /* nothing to free... */

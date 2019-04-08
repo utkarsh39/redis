@@ -2012,6 +2012,9 @@ void resetServerStats(void) {
     server.stat_evictedkeys = 0;
     server.stat_keyspace_misses = 0;
     server.stat_keyspace_hits = 0;
+    server.stat_evictedgroups = 0;
+    server.stat_groupspace_misses = 0;
+    server.stat_groupspace_hits = 0;
     server.stat_active_defrag_hits = 0;
     server.stat_active_defrag_misses = 0;
     server.stat_active_defrag_key_hits = 0;
@@ -3439,8 +3442,11 @@ sds genRedisInfoString(char *section) {
             "expired_stale_perc:%.2f\r\n"
             "expired_time_cap_reached_count:%lld\r\n"
             "evicted_keys:%lld\r\n"
+            "evicted_groups:%lld\r\n"
             "keyspace_hits:%lld\r\n"
             "keyspace_misses:%lld\r\n"
+            "group_hits:%lld\r\n"
+            "group_misses:%lld\r\n"
             "pubsub_channels:%ld\r\n"
             "pubsub_patterns:%lu\r\n"
             "latest_fork_usec:%lld\r\n"
@@ -3465,8 +3471,11 @@ sds genRedisInfoString(char *section) {
             server.stat_expired_stale_perc*100,
             server.stat_expired_time_cap_reached_count,
             server.stat_evictedkeys,
+            server.stat_evictedgroups,
             server.stat_keyspace_hits,
             server.stat_keyspace_misses,
+            server.stat_groupspace_hits,
+            server.stat_groupspace_misses,
             dictSize(server.pubsub_channels),
             listLength(server.pubsub_patterns),
             server.stat_fork_time,
@@ -4245,13 +4254,13 @@ sds keyToGroupsGet(int numKeys, robj **keys) {
 
 sds keyToGroupsSet(int numKeys, robj **keys) {
     sds group = sdsnew(NULL);
-    serverLog(LL_DEBUG, "CAT %d", numKeys);
+    // serverLog(LL_DEBUG, "CAT %d", numKeys);
     for (int i = 0, j = 0; i < numKeys; i++, j += 2) {
         group = sdscat(group, (const char *)(keys[j]->ptr));
         if (i < numKeys - 1) {
             group = sdscat(group, "\t");
         }
-        serverLog(LL_DEBUG, "CATKEY %s", (const char *)(keys[j]->ptr));
+        // serverLog(LL_DEBUG, "CATKEY %s", (const char *)(keys[j]->ptr));
     }
     return group;
 }
