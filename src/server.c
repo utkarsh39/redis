@@ -1195,7 +1195,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Show some info about non-empty databases */
     run_with_period(5000) {
         for (j = 0; j < server.dbnum; j++) {
-            long long size, used, vkeys, num_groups, num_keys, num_key_refs;
+            long long size, used, vkeys, num_groups, num_key_refs;
 
             size = dictSlots(server.db[j].dict);
             used = dictSize(server.db[j].dict);
@@ -1205,7 +1205,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             if (used || vkeys || num_groups || num_key_refs) {
                 serverLog(LL_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 serverLog(LL_VERBOSE,"%lld groups in group HT.",num_groups);
-                serverLog(LL_VERBOSE,"%lld keys in key_value_store HT.",num_keys);
                 serverLog(LL_VERBOSE,"%lld key_refs in key_ref_count HT.",num_key_refs);
                 /* dictPrintStats(server.dict); */
             }
@@ -3659,7 +3658,7 @@ sds genRedisInfoString(char *section) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < server.dbnum; j++) {
-            long long keys, vkeys, num_groups, num_keys, key_refs;
+            long long keys, vkeys, num_groups, key_refs;
 
             keys = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
@@ -3668,7 +3667,7 @@ sds genRedisInfoString(char *section) {
             if (keys || vkeys || num_groups || key_refs) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,groups=%lld,"
-                    "key_refs\r\n",j, keys, vkeys, server.db[j].avg_ttl, num_groups, key_refs);
+                    "key_refs=%lld\r\n",j, keys, vkeys, server.db[j].avg_ttl, num_groups, key_refs);
             }
         }
     }

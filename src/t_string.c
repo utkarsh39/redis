@@ -371,12 +371,12 @@ void gsetCommand(client *c) {
     sds group = keyToGroupsSet((c->argc - 1)/2, &(c->argv[1]));
     // Multi set for keys
     for (j = 1; j < c->argc; j += 2) {
-        // if (sdslen(c->argv[j+1]->ptr)) {
-            c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
-            // Set key value if value is not an empty string
-            setKey(c->db,c->argv[j],c->argv[j+1]);
+            if (strcmp(c->argv[j+1]->ptr, "GSET")) {
+                c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+                // Set key value if value is not an empty string
+                setKey(c->db,c->argv[j],c->argv[j+1]);
+            }
     }
-    // serverLog(LL_DEBUG, "SET Groupppppp %s", group);
     setGroupLRU(c->db, group);
     sdsfree(group);
     addReply(c, shared.ok);
