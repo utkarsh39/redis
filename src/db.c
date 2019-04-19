@@ -220,7 +220,8 @@ void setKey(redisDb *db, robj *key, robj *val) {
         dbOverwrite(db,key,val);
     }
     incrRefCount(val);
-    removeExpire(db,key);
+    // NOT NEEDED FOR group GET/SET use case
+    // removeExpire(db,key);
     signalModifiedKey(db,key);
 }
 

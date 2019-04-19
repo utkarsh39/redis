@@ -603,6 +603,8 @@ int freeMemoryIfNeeded(void) {
                 unsigned long total_keys = 0, keys;
                 unsigned long total_groups = 0, groups;
 
+                // NOT NEEDED FOR group GET/SET use case
+
                 /* We don't want to make local-db choices when expiring keys,
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */

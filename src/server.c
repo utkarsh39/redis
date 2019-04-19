@@ -747,7 +747,7 @@ void tryResizeHashTables(int dbid) {
         dictResize(server.db[dbid].expires);
     if (htNeedsResize(server.db[dbid].groupLRU))
         dictResize(server.db[dbid].groupLRU);
-    if (htNeedsResize(server.db[dbid].groupLRU))
+    if (htNeedsResize(server.db[dbid].key_ref_count))
         dictResize(server.db[dbid].key_ref_count);
 }
 
