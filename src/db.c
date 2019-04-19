@@ -57,19 +57,21 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
     if (de) {
         robj *val = dictGetVal(de);
 
-        /* Update the access time for the ageing algorithm.
-         * Don't do it if we have a saving child, as this will trigger
-         * a copy on write madness. */
-        if (server.rdb_child_pid == -1 &&
-            server.aof_child_pid == -1 &&
-            !(flags & LOOKUP_NOTOUCH))
-        {
-            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
-        }
+        // NOT NEEDED FOR group GET/SET use case
+
+        // /* Update the access time for the ageing algorithm.
+        //  * Don't do it if we have a saving child, as this will trigger
+        //  * a copy on write madness. */
+        // if (server.rdb_child_pid == -1 &&
+        //     server.aof_child_pid == -1 &&
+        //     !(flags & LOOKUP_NOTOUCH))
+        // {
+        //     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        //         updateLFU(val);
+        //     } else {
+        //         val->lru = LRU_CLOCK();
+        //     }
+        // }
         return val;
     } else {
         return NULL;
@@ -150,7 +152,8 @@ robj *lookupKeyRead(redisDb *db, robj *key) {
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
-    expireIfNeeded(db,key);
+    // NOT NEEDED FOR group GET/SET use case
+    // expireIfNeeded(db,key);
     return lookupKey(db,key,LOOKUP_NONE);
 }
 
@@ -222,7 +225,7 @@ void setKey(redisDb *db, robj *key, robj *val) {
     incrRefCount(val);
     // NOT NEEDED FOR group GET/SET use case
     // removeExpire(db,key);
-    signalModifiedKey(db,key);
+    // signalModifiedKey(db,key);
 }
 
 int dbExists(redisDb *db, robj *key) {
